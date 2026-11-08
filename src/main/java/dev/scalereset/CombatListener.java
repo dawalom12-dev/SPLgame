@@ -6,9 +6,20 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
 public class CombatListener implements Listener {
 
     private final ScaleResetPlugin plugin;
+    // Время последнего отправленного сообщения игроку
+    private final Map<UUID, Long> lastMessage = new HashMap<>();
+
+    // Погрешность для сравнения с 1.0
+    private static final double SCALE_TOLERANCE = 0.01;
+    // Минимум между сообщениями (5 секунд)
+    private static final long MESSAGE_COOLDOWN_MS = 5000L;
 
     public CombatListener(ScaleResetPlugin plugin) {
         this.plugin = plugin;
@@ -16,21 +27,37 @@ public class CombatListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPvP(EntityDamageByEntityEvent event) {
-        // Проверяем, что и атакующий, и жертва — игроки
         if (!(event.getEntity() instanceof Player victim)) return;
         if (!(event.getDamager() instanceof Player attacker)) return;
 
-        // Сбрасываем рост атакующему
-        ScaleUtil.resetScale(attacker);
-        // Ставим кулдаун атакующему
-        plugin.getCooldownManager().setCooldown(attacker);
-        // Отправляем сообщение
-        attacker.sendMessage(ScaleResetPlugin.comp(
-                plugin.getConfig().getString("settings.reset-message", "&cРост сброшен из-за PvP!")
-        ));
+        handlePlayerInCombat(attacker);
+        handlePlayerInCombat(victim);
+    }
 
-        // Опционально: можно также сбросить рост жертве
-        // ScaleUtil.resetScale(victim);
-        // plugin.getCooldownManager().setCooldown(victim);
+    private void handlePlayerInCombat(Player player) {
+        // Всегда ставим кулдаун при ударе (чтобы нельзя было менять рост в бою)
+        plugin.getCooldownManager().setCooldown(player);
+
+        double scale = ScaleUtil.getScale(player);
+
+        // Если рост уже 1.0 — ничего не делаем, не спамим
+        if (Math.abs(scale - 1.0) <= SCALE_TOLERANCE) {
+            return;
+        }
+
+        // Сбрасываем рост
+        ScaleUtil.resetScale(player);
+
+        // Проверяем кулдаун на сообщение
+        long now = System.currentTimeMillis();
+        Long last = lastMessage.get(player.getUniqueId());
+        if (last != null && now - last < MESSAGE_COOLDOWN_MS) {
+            return; // Уже недавно отправляли — молчим
+        }
+
+        lastMessage.put(player.getUniqueId(), now);
+        player.sendMessage(ScaleResetPlugin.comp(
+                plugin.getConfig().getString("settings.reset-message", "&c&lВАШ РОСТ СБРОШЕН &cиз-за PvP! Кулдаун: 2 минуты.")
+        ));
     }
 }
